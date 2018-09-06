@@ -34,6 +34,8 @@ To convert the certificate to DER format:
 
 # Using Docker
 
+_note_: ensure you are running 'real' Docker [docker-ce](https://docs.docker.com/install/#supported-platforms)
+
 To build with Docker:
 
 ```
