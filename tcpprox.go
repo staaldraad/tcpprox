@@ -124,6 +124,7 @@ func startListener(isTLS bool) {
 		if config.CertFile != "" {
 			cert, _ = tls.LoadX509KeyPair(fmt.Sprint(config.CertFile, ".pem"), fmt.Sprint(config.CertFile, ".key"))
 		} else {
+            fmt.Println("[*] Generating cert")
 			ca_b, priv := genCert()
 			cert = tls.Certificate{
 				Certificate: [][]byte{ca_b},

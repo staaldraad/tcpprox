@@ -1,13 +1,13 @@
-tcpprox
-------
+# tcpprox
+
 
 A simple TCP proxy written in GO. Allows for proxy-ing TCP connections as well as TLS wrapped TCP connections.
 
 Can be run simply from the command-line using arguments. Or supplying a config file. Or both.
 _The command line arguments have precidence and override the config file_
 
-Usage
-----
+# Usage
+
 To create a TLS proxy using the supplied config file:
 
 `tcpprox -s -c config.json -r 172.16.0.12:4550`
@@ -30,3 +30,21 @@ openssl req -new -x509 -key server.key -out server.pem -days 3650
 To convert the certificate to DER format:
 
 `openssl x509 -in server.pem -out server.crt -outform der`
+
+
+# Using Docker
+
+To build with Docker:
+
+```
+docker build . -t tcpprox:latest
+```
+
+Run the container:
+
+```
+docker run -it --rm -p 8000:8000 tcpprox:latest -p 8000 -s -r google.com:443
+```
+
+This will create a TLS enabled listener on port 8000 and proxy traffic to google.com:443
+
