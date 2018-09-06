@@ -4,7 +4,7 @@
     "localport":1990,
     "TLS":{
             "Country":["GB"],
-            "Org":["SensePost"],
+            "Org":["Staaldraad"],
             "CommonName":"*.domain.com"
     },
     "Certfile":""
