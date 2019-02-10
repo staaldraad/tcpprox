@@ -36,16 +36,24 @@ To convert the certificate to DER format:
 
 _note_: ensure you are running 'real' Docker [docker-ce](https://docs.docker.com/install/#supported-platforms)
 
-To build with Docker:
+**To build locally with Docker:**
 
 ```
-docker build . -t tcpprox:latest
+docker build . -t staaldraad/tcpprox:latest
 ```
 
-Run the container:
+Or, even better, just get it directly off of Docker Hub
+
+**Get from Docker Hub**
 
 ```
-docker run -it --rm -p 8000:8000 tcpprox:latest -p 8000 -s -r google.com:443
+docker pull staaldraad/tcpprox:latest
+```
+
+**Run the container:**
+
+```
+docker run -it --rm -p 8000:8000 staaldraad/tcpprox:latest -p 8000 -s -r google.com:443
 ```
 
 This will create a TLS enabled listener on port 8000 and proxy traffic to google.com:443
