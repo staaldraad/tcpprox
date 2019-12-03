@@ -1,0 +1,9 @@
+# Example testing Docker Compose manifest (same as readme). Usage:
+# $ curl --insecure --header https://localhost:8000
+tcpprox:
+  container_name: tcpprox
+  build: .
+#  image: staaldraad/tcpprox
+  command: -p 8000 -s -r google.com:443
+  ports:
+    - "8000:8000"
