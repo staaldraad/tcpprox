@@ -50,6 +50,22 @@ If proxying a connection where the upstream server uses mTLS, tcpprox can be con
 tcpprox -s -c config.json -cert server.pem -key server.key -clientCert client.pem -clientKey client.key
 ```
 
+The application that is being proxied through tcpprox does not have to supply a client certificate (although it can). 
+
+This allows for either:
+
+```
+client <---TLS---> tcpprox <---mTLS---> server
+```
+
+or
+
+```
+client <---mTLS---> tcpprox <---mTLS---> server
+```
+
+Tcpprox will allow both types of connections through, as long as tcpprox is able to use mTLS to connect to the server, the client is oblivious of what is happening upstream.
+
 ## Config File
 
 The config file can be used instead of supplying all information on the command line. The options specified in the file will be overwritten by any matching command line arguments. This allows for using a config file and overriding one or more options for testing / variation between hosts.
