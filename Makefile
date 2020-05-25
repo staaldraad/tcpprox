@@ -3,8 +3,8 @@ build:
 
 run:
 	go run tcpprox.go
-	
-build all:
+
+compile:
 	# 32-bit
 	# Linux
 	GOOS=linux GOARCH=386 go build -o tcpprox-linux86
