@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"math/big"
 	"net"
 	"os"
@@ -25,11 +26,14 @@ type TLS struct {
 }
 
 type Config struct {
-	Remotehost string
-	Localhost  string
-	Localport  int
-	TLS        *TLS
-	CertFile   string ""
+	Remotehost     string `json:"remotehost"`
+	Localhost      string `json:"localhost"`
+	Localport      int    `json:"localport"`
+	TLS            *TLS   `json:"TLS"`
+	CACertFile     string `json:"CACertFile"`
+	CAKeyFile      string `json:"CAKeyFile"`
+	ClientCertFile string `json:"ClientCertFile"` // client cert for mTLS
+	ClientKeyFile  string `json:"ClientKeyFile"`  // client priv key for mTLS
 }
 
 var config Config
@@ -47,9 +51,9 @@ func genCert() ([]byte, *rsa.PrivateKey) {
 		NotAfter:              time.Now().AddDate(10, 0, 0),
 		SubjectKeyId:          []byte{1, 2, 3, 4, 5},
 		BasicConstraintsValid: true,
-		IsCA:        true,
-		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
-		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		IsCA:                  true,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
 	}
 
 	priv, _ := rsa.GenerateKey(rand.Reader, 1024)
@@ -83,12 +87,22 @@ func handleConnection(conn net.Conn, isTLS bool) {
 
 	if isTLS == true {
 		conf := tls.Config{InsecureSkipVerify: true}
+
+		if config.ClientKeyFile != "" { //use mtls
+			cert, err := tls.LoadX509KeyPair(config.ClientCertFile, config.ClientKeyFile)
+			if err != nil {
+				log.Fatal(err)
+			}
+			conf.Certificates = []tls.Certificate{cert}
+		}
+
 		connR, err = tls.Dial("tcp", config.Remotehost, &conf)
 	} else {
 		connR, err = net.Dial("tcp", config.Remotehost)
 	}
 
 	if err != nil {
+		log.Fatal(err)
 		return
 	}
 
@@ -121,10 +135,10 @@ func startListener(isTLS bool) {
 	var cert tls.Certificate
 
 	if isTLS == true {
-		if config.CertFile != "" {
-			cert, _ = tls.LoadX509KeyPair(fmt.Sprint(config.CertFile, ".pem"), fmt.Sprint(config.CertFile, ".key"))
+		if config.CACertFile != "" {
+			cert, _ = tls.LoadX509KeyPair(fmt.Sprint(config.CACertFile), fmt.Sprint(config.CAKeyFile))
 		} else {
-            fmt.Println("[*] Generating cert")
+			fmt.Println("[*] Generating cert")
 			ca_b, priv := genCert()
 			cert = tls.Certificate{
 				Certificate: [][]byte{ca_b},
@@ -132,9 +146,25 @@ func startListener(isTLS bool) {
 			}
 		}
 
+		// we don't have to set mTLS on the listener, it will simply accept connection with or
+		// without the client supplying a cert. The mTLS part happens with the connection to the
+		// upstream host
 		conf := tls.Config{
 			Certificates: []tls.Certificate{cert},
 		}
+
+		/* optional to add mTLS on the listener side
+		if config.ClientKeyFile != "" {
+			caCert, err := ioutil.ReadFile(config.ClientKeyFile)
+			if err != nil {
+				log.Fatal(err)
+			}
+			caCertPool := x509.NewCertPool()
+			caCertPool.AppendCertsFromPEM(caCert)
+			conf.ClientCAs = caCertPool
+			conf.ClientAuth = tls.RequireAndVerifyClientCert
+		} */
+
 		conf.Rand = rand.Reader
 
 		conn, err = tls.Listen("tcp", fmt.Sprint(config.Localhost, ":", config.Localport), &conf)
@@ -161,7 +191,7 @@ func startListener(isTLS bool) {
 	conn.Close()
 }
 
-func setConfig(configFile string, localPort int, localHost, remoteHost string, certFile string) {
+func setConfig(configFile string, localPort int, localHost, remoteHost string, caCertFile, caKeyFile string, clientCertFile, clientKeyFile string) {
 	if configFile != "" {
 		data, err := ioutil.ReadFile(configFile)
 		if err != nil {
@@ -177,8 +207,14 @@ func setConfig(configFile string, localPort int, localHost, remoteHost string, c
 		config = Config{TLS: &TLS{}}
 	}
 
-	if certFile != "" {
-		config.CertFile = certFile
+	if caCertFile != "" {
+		config.CACertFile = caCertFile
+		config.CAKeyFile = caKeyFile
+	}
+
+	if clientCertFile != "" {
+		config.ClientCertFile = clientCertFile
+		config.ClientKeyFile = clientKeyFile
 	}
 
 	if localPort != 0 {
@@ -198,11 +234,24 @@ func main() {
 	remoteHostPtr := flag.String("r", "", "Remote Server address host:port")
 	configPtr := flag.String("c", "", "Use a config file (set TLS ect) - Commandline params overwrite config file")
 	tlsPtr := flag.Bool("s", false, "Create a TLS Proxy")
-	certFilePtr := flag.String("cert", "", "Use a specific certificate file")
+	caCertFilePtr := flag.String("cert", "", "Use a specific ca cert file")
+	caKeyFilePtr := flag.String("key", "", "Use a specific ca key file (must be set if --cert is set")
+	clientCertPtr := flag.String("clientCert", "", "A public client cert to use for mTLS")
+	clientKeyPtr := flag.String("clientKey", "", "A public client key to use for mTLS")
 
 	flag.Parse()
 
-	setConfig(*configPtr, *localPort, *localHost, *remoteHostPtr, *certFilePtr)
+	if *caCertFilePtr != "" && *caKeyFilePtr == "" {
+		fmt.Println("[x] -key is required when -cert is set")
+		os.Exit(1)
+	}
+
+	if *clientCertPtr != "" && *clientKeyPtr == "" {
+		fmt.Println("[x] -clientKey is required when -clientCert is set")
+		os.Exit(1)
+	}
+
+	setConfig(*configPtr, *localPort, *localHost, *remoteHostPtr, *caCertFilePtr, *caKeyFilePtr, *clientCertPtr, *clientKeyPtr)
 
 	if config.Remotehost == "" {
 		fmt.Println("[x] Remote host required")
