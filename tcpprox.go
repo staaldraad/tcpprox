@@ -303,8 +303,6 @@ func main() {
 
 	setConfig(*configPtr, *localPort, *localHost, *remoteHostPtr, *caCertFilePtr, *caKeyFilePtr, *clientCertPtr, *clientKeyPtr)
 
-	config.IPS = []string{"192.168.1.1"}
-
 	if config.Remotehost == "" {
 		fmt.Println("[x] Remote host required")
 		flag.PrintDefaults()
