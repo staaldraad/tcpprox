@@ -26,14 +26,16 @@ type TLS struct {
 }
 
 type Config struct {
-	Remotehost     string `json:"remotehost"`
-	Localhost      string `json:"localhost"`
-	Localport      int    `json:"localport"`
-	TLS            *TLS   `json:"TLS"`
-	CACertFile     string `json:"CACertFile"`
-	CAKeyFile      string `json:"CAKeyFile"`
-	ClientCertFile string `json:"ClientCertFile"` // client cert for mTLS
-	ClientKeyFile  string `json:"ClientKeyFile"`  // client priv key for mTLS
+	Remotehost     string   `json:"remotehost"`
+	Localhost      string   `json:"localhost"`
+	Localport      int      `json:"localport"`
+	TLS            *TLS     `json:"TLS"`
+	CACertFile     string   `json:"CACertFile"`
+	CAKeyFile      string   `json:"CAKeyFile"`
+	ClientCertFile string   `json:"ClientCertFile"` // client cert for mTLS
+	ClientKeyFile  string   `json:"ClientKeyFile"`  // client priv key for mTLS
+	IPS            []string // IPAddress for the child cert
+	Names          []string // DNSNames for the child cert
 }
 
 var config Config
@@ -41,7 +43,7 @@ var ids = 0
 
 func genCert() ([]byte, *rsa.PrivateKey) {
 	ca := &x509.Certificate{
-		SerialNumber: big.NewInt(1653),
+		SerialNumber: big.NewInt(128),
 		Subject: pkix.Name{
 			Country:      config.TLS.Country,
 			Organization: config.TLS.Org,
@@ -56,13 +58,56 @@ func genCert() ([]byte, *rsa.PrivateKey) {
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
 	}
 
-	priv, _ := rsa.GenerateKey(rand.Reader, 1024)
+	priv, _ := rsa.GenerateKey(rand.Reader, 2048)
 	pub := &priv.PublicKey
 	ca_b, err := x509.CreateCertificate(rand.Reader, ca, ca, pub, priv)
 	if err != nil {
 		fmt.Println("create ca failed", err)
 	}
 	return ca_b, priv
+}
+
+func genChildCert(cert tls.Certificate, ips, names []string) []byte {
+
+	parent, err := x509.ParseCertificate(cert.Certificate[0])
+
+	s, _ := rand.Prime(rand.Reader, 128)
+
+	template := &x509.Certificate{
+		SerialNumber:          s,
+		Subject:               pkix.Name{Organization: []string{"Argo Incorporated"}},
+		Issuer:                pkix.Name{Organization: []string{"Argo Incorporated"}},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().AddDate(10, 0, 0),
+		BasicConstraintsValid: true,
+		IsCA:                  false,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+	}
+	if ips != nil {
+		is := make([]net.IP, 0)
+		for _, i := range ips {
+			is = append(is, net.ParseIP(i))
+		}
+		template.IPAddresses = is
+	}
+	if names != nil {
+		template.DNSNames = names
+	}
+
+	private := cert.PrivateKey.(*rsa.PrivateKey)
+
+	certP, _ := x509.ParseCertificate(cert.Certificate[0])
+	public := certP.PublicKey.(*rsa.PublicKey)
+
+	cab, err := x509.CreateCertificate(rand.Reader, template, parent, public, private)
+	if err != nil {
+		fmt.Println("create ca failed", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("[*] Child Certificate files generated")
+	return cab
 }
 
 func handleServerMessage(connR, connC net.Conn, id int) {
@@ -102,7 +147,7 @@ func handleConnection(conn net.Conn, isTLS bool) {
 	}
 
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("[x] Couldn't connect: %s", err)
 		return
 	}
 
@@ -136,7 +181,7 @@ func startListener(isTLS bool) {
 
 	if isTLS == true {
 		if config.CACertFile != "" {
-			cert, _ = tls.LoadX509KeyPair(fmt.Sprint(config.CACertFile), fmt.Sprint(config.CAKeyFile))
+			cert, _ = tls.LoadX509KeyPair(config.CACertFile, config.CAKeyFile)
 		} else {
 			fmt.Println("[*] Generating cert")
 			ca_b, priv := genCert()
@@ -144,6 +189,11 @@ func startListener(isTLS bool) {
 				Certificate: [][]byte{ca_b},
 				PrivateKey:  priv,
 			}
+		}
+
+		if config.IPS != nil || config.Names != nil {
+			newCert := genChildCert(cert, config.IPS, config.Names)
+			cert.Certificate = [][]byte{newCert}
 		}
 
 		// we don't have to set mTLS on the listener, it will simply accept connection with or
@@ -252,6 +302,8 @@ func main() {
 	}
 
 	setConfig(*configPtr, *localPort, *localHost, *remoteHostPtr, *caCertFilePtr, *caKeyFilePtr, *clientCertPtr, *clientKeyPtr)
+
+	config.IPS = []string{"192.168.1.1"}
 
 	if config.Remotehost == "" {
 		fmt.Println("[x] Remote host required")
