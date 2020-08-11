@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -13,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"net"
 	"os"
 	"time"
@@ -132,19 +130,23 @@ func dumpData(r io.Reader, source string, id int) {
 
 }
 
-func handleServerMessage(connR, connC net.Conn, id int) {
+func handleServerMessage(connR, connL net.Conn, id int) {
 	// see comments in handleConnection
 	// this is the same, just inverse, reads from server, writes to client
-	reader := bufio.NewReader(connR)
-	writer := io.Writer(connC)
+	reader := io.Reader(connR)
+	writer := io.Writer(connL)
 
 	r, w := io.Pipe()
-	tee := io.TeeReader(reader, w)
+	tee := io.MultiWriter(writer, w)
 	go dumpData(r, "SERVER", id)
-	io.Copy(writer, tee)
+	_, e := io.Copy(tee, reader)
+
+	if e != nil && e != io.EOF {
+		fmt.Printf("bad io.Copy [handleServerMessage]: %v", e)
+	}
 }
 
-func handleConnection(conn net.Conn, isTLS bool) {
+func handleConnection(connL net.Conn, isTLS bool) {
 	var err error
 	var connR net.Conn
 
@@ -154,7 +156,8 @@ func handleConnection(conn net.Conn, isTLS bool) {
 		if config.ClientKeyFile != "" { //use mtls
 			cert, err := tls.LoadX509KeyPair(config.ClientCertFile, config.ClientKeyFile)
 			if err != nil {
-				log.Fatal(err)
+				fmt.Printf("couldn't load cert, %v", err)
+				return
 			}
 			conf.Certificates = []tls.Certificate{cert}
 		}
@@ -165,18 +168,21 @@ func handleConnection(conn net.Conn, isTLS bool) {
 	}
 
 	if err != nil {
-		log.Printf("[x] Couldn't connect: %s", err)
+		fmt.Printf("[x] Couldn't connect: %v", err)
 		return
 	}
 
 	fmt.Printf("[*][%d] Connected to server: %s\n", ids, connR.RemoteAddr())
 
+	defer connL.Close()
+	defer connR.Close()
+
 	// setup handler to read from server and print to screen
-	go handleServerMessage(connR, conn, ids)
+	go handleServerMessage(connR, connL, ids)
 	ids++
 
 	// new reader to read from the client connection
-	reader := io.Reader(conn)
+	reader := io.Reader(connL)
 	// new writer to write to the server connection
 	writer := io.Writer(connR)
 
@@ -184,19 +190,20 @@ func handleConnection(conn net.Conn, isTLS bool) {
 	// consuming the data
 	r, w := io.Pipe()
 
-	// create a TeeReader which will write everything it reads to the supplied writer
-	// this means each read from the client, will result in a write to the pipe,
+	// create a MultiWriter which allows writing to multiple writers at once.
+	// this means each read from the client, will result in a write to both the server writer and the pipe writer,
 	// which then gets sent to the "dumpData" reader, which will output it to the screen
-	tee := io.TeeReader(reader, w)
+	tee := io.MultiWriter(writer, w)
 
 	// background the dumping of data to screen
 	go dumpData(r, "CLIENT", ids)
 
 	// consume all data and forward between connections in memory
-	io.Copy(writer, tee)
+	_, e := io.Copy(tee, reader)
+	if e != nil && e != io.EOF {
+		fmt.Printf("bad io.Copy [handleConnection]: %v", e)
+	}
 
-	connR.Close()
-	conn.Close()
 }
 
 func startListener(isTLS bool) {
@@ -258,7 +265,7 @@ func startListener(isTLS bool) {
 	for {
 		cl, err := conn.Accept()
 		if err != nil {
-			fmt.Printf("server: accept: %s", err)
+			fmt.Printf("server: accept: %v", err)
 			break
 		}
 		fmt.Printf("[*] Accepted from: %s\n", cl.RemoteAddr())
