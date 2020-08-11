@@ -96,3 +96,44 @@ docker run -it --rm -p 8000:8000 staaldraad/tcpprox:latest -p 8000 -s -r google.
 
 This will create a TLS enabled listener on port 8000 and proxy traffic to google.com:443
 
+
+**Something about performance**
+
+Method of outputting (displaying) the data being proxied determines how close to "non-proxied" performance you get.
+
+* Running with `-raw -o /path/to/file` gives near native speed. AKA, it is as if the proxy isn't there. 
+* Running with `-o /path/to/file` is almost as fast
+* Outputting the hex.dump directly to screen is the slowest option. To get better speed, output hex to a file and use `tail -f /path/to/file`. It is still a little slower (depending on hardware) but better than direct to screen.
+
+Direct to screen with hex dump formatting (default): `./tcproxy -p 8000 user@remote`
+```
+$ scp -P 8000 root@localhost:file.txt /tmp/p
+file.txt                                                                                    100%   10MB   2.1MB/s   00:04    
+```
+
+Write to file with hex dump formatting: `./tcproxy -p 8000 user@remote -o /tmp/session`
+```
+$ scp -P 8000 root@localhost:file.txt /tmp/p
+file.txt                                                                                    100%   10MB  10.2MB/s   00:00      
+```
+
+Write raw stream to file: `./tcproxy -p 8000 user@remote -o /tmp/session -raw`
+```
+$ scp -P 8000 root@localhost:file.txt /tmp/p
+file.txt                                                                                    100%   10MB  10.7MB/s   00:00    
+
+```
+
+Write to file with hex dump formatting: `./tcproxy -p 8000 user@remote -o /tmp/session ` and use tail to view live stream: `tail -f /tmp/session`
+```
+$ scp -P 8000 root@localhost:file.txt /tmp/p
+file.txt                                                                                    100%   10MB   5.9MB/s   00:01    
+
+```
+
+And raw (no output at all): `./tcproxy -p 8000 user@remote -raw`
+
+```
+$ scp -P 8000 root@localhost:file.txt /tmp/p
+file.txt                                                                                    100%   10MB  12.2MB/s   00:00    
+```
