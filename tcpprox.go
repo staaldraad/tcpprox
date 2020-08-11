@@ -13,7 +13,6 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
-	"math/big"
 	"net"
 	"os"
 	"time"
@@ -42,8 +41,9 @@ var config Config
 var ids = 0
 
 func genCert() ([]byte, *rsa.PrivateKey) {
+	s, _ := rand.Prime(rand.Reader, 128)
 	ca := &x509.Certificate{
-		SerialNumber: big.NewInt(128),
+		SerialNumber: s,
 		Subject: pkix.Name{
 			Country:      config.TLS.Country,
 			Organization: config.TLS.Org,
@@ -184,9 +184,9 @@ func startListener(isTLS bool) {
 			cert, _ = tls.LoadX509KeyPair(config.CACertFile, config.CAKeyFile)
 		} else {
 			fmt.Println("[*] Generating cert")
-			ca_b, priv := genCert()
+			cab, priv := genCert()
 			cert = tls.Certificate{
-				Certificate: [][]byte{ca_b},
+				Certificate: [][]byte{cab},
 				PrivateKey:  priv,
 			}
 		}
