@@ -10,5 +10,7 @@
     "CACertFile":"",
     "CAKeyFile":"",
     "ClientCertFile":"",
-    "ClientKeyFile":"" 
+    "ClientKeyFile":"",
+    "IPS" : [],
+    "Names" : []
 }
