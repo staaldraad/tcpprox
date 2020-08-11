@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -34,10 +35,14 @@ type Config struct {
 	ClientKeyFile  string   `json:"ClientKeyFile"`  // client priv key for mTLS
 	IPS            []string // IPAddress for the child cert
 	Names          []string // DNSNames for the child cert
+	Raw            bool     `json:"Raw"`
+	ToFile         string   `json:"ToFile"`
+	Quiet          bool     `json:"Quiet"`
 }
 
 var config Config
 var ids = 0
+var sessionFile *os.File
 
 func genCert() ([]byte, *rsa.PrivateKey) {
 	s, _ := rand.Prime(rand.Reader, 128)
@@ -116,15 +121,40 @@ func genChildCert(cert tls.Certificate, ips, names []string) []byte {
 
 func dumpData(r io.Reader, source string, id int) {
 
-	data := make([]byte, 512)
-	for {
-		n, err := r.Read(data)
-		if n > 0 {
-			fmt.Printf("From %s [%d]:\n", source, id)
-			fmt.Println(hex.Dump(data[:n]))
+	if config.Raw && config.ToFile != "" {
+		io.Copy(sessionFile, r)
+	} else {
+
+		var fw io.Writer
+		if config.ToFile != "" {
+			fw = bufio.NewWriter(sessionFile)
 		}
-		if err != nil {
-			break
+
+		data := make([]byte, 512)
+		for {
+			n, err := r.Read(data)
+			if n > 0 {
+				// hex.Dump + screen output slows things down badly, up to a 5x slow-down
+				// best to dump to file and view with tail -f
+				// best yet is to only view the file after the transfer completes
+				if !config.Raw {
+					if config.ToFile != "" {
+						fw.Write([]byte(fmt.Sprintf("From %s [%d]:\n", source, id)))
+						// doing this is MUCH faster than using hex.Dumper and io.Copy :shrug:
+						fw.Write([]byte(fmt.Sprintln(hex.Dump(data[:n]))))
+					} else {
+						fmt.Printf("From %s [%d]:\n", source, id)
+						fmt.Println(hex.Dump(data[:n]))
+					}
+				}
+			}
+			if err != nil && err != io.EOF {
+				fmt.Printf("unable to read data %v", err)
+				break
+			}
+			if n == 0 {
+				break
+			}
 		}
 	}
 
@@ -187,7 +217,6 @@ func handleConnection(connL net.Conn, isTLS bool) {
 
 	// setup handler to read from server and print to screen
 	go handleServerMessage(connR, connL, ids)
-	ids++
 
 	// new reader to read from the client connection
 	reader := io.Reader(connL)
@@ -205,6 +234,7 @@ func handleConnection(connL net.Conn, isTLS bool) {
 
 	// background the dumping of data to screen
 	go dumpData(r, "CLIENT", ids)
+	ids++
 
 	// consume all data and forward between connections in memory
 	_, e := io.Copy(tee, reader)
@@ -282,7 +312,7 @@ func startListener(isTLS bool) {
 	conn.Close()
 }
 
-func setConfig(configFile string, localPort int, localHost, remoteHost string, caCertFile, caKeyFile string, clientCertFile, clientKeyFile string) {
+func setConfig(configFile string, localPort int, localHost, remoteHost string, caCertFile, caKeyFile string, clientCertFile, clientKeyFile, outFile string) {
 	if configFile != "" {
 		data, err := ioutil.ReadFile(configFile)
 		if err != nil {
@@ -317,6 +347,10 @@ func setConfig(configFile string, localPort int, localHost, remoteHost string, c
 	if remoteHost != "" {
 		config.Remotehost = remoteHost
 	}
+
+	if outFile != "" {
+		config.ToFile = outFile
+	}
 }
 
 func main() {
@@ -329,6 +363,9 @@ func main() {
 	caKeyFilePtr := flag.String("key", "", "Use a specific ca key file (must be set if --cert is set")
 	clientCertPtr := flag.String("clientCert", "", "A public client cert to use for mTLS")
 	clientKeyPtr := flag.String("clientKey", "", "A public client key to use for mTLS")
+	quietPtr := flag.Bool("q", false, "Hide app messages and just show the data stream")
+	rawPtr := flag.Bool("raw", false, "Don't use hex.dump to pretty format output")
+	outFilePtr := flag.String("o", "", "Write output to file")
 
 	flag.Parse()
 
@@ -342,7 +379,24 @@ func main() {
 		os.Exit(1)
 	}
 
-	setConfig(*configPtr, *localPort, *localHost, *remoteHostPtr, *caCertFilePtr, *caKeyFilePtr, *clientCertPtr, *clientKeyPtr)
+	setConfig(*configPtr, *localPort, *localHost, *remoteHostPtr, *caCertFilePtr, *caKeyFilePtr, *clientCertPtr, *clientKeyPtr, *outFilePtr)
+
+	config.Quiet = *quietPtr
+	config.Raw = *rawPtr
+
+	if config.Raw && config.ToFile == "" {
+		fmt.Println("[-] Raw mode specified but no output file supplied. There won't be any output!")
+	}
+
+	if config.ToFile != "" {
+		var e error
+		sessionFile, e = os.Create(config.ToFile)
+		if e != nil {
+			fmt.Println("[x] Couldn't open file for writing")
+			os.Exit(1)
+		}
+		defer sessionFile.Close()
+	}
 
 	if config.Remotehost == "" {
 		fmt.Println("[x] Remote host required")
