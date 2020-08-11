@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -19,9 +20,9 @@ import (
 )
 
 type TLS struct {
-	Country    []string "GB"
-	Org        []string ""
-	CommonName string   "*.domain.com"
+	Country    []string
+	Org        []string
+	CommonName string
 }
 
 type Config struct {
@@ -71,6 +72,11 @@ func genChildCert(cert tls.Certificate, ips, names []string) []byte {
 
 	parent, err := x509.ParseCertificate(cert.Certificate[0])
 
+	if err != nil {
+		fmt.Println("create child cert failed")
+		return nil
+	}
+
 	s, _ := rand.Prime(rand.Reader, 128)
 
 	template := &x509.Certificate{
@@ -110,27 +116,39 @@ func genChildCert(cert tls.Certificate, ips, names []string) []byte {
 	return cab
 }
 
-func handleServerMessage(connR, connC net.Conn, id int) {
+func dumpData(r io.Reader, source string, id int) {
+
 	for {
-		data := make([]byte, 2048)
-		n, err := connR.Read(data)
+		data := make([]byte, 1024)
+		n, err := r.Read(data)
 		if n > 0 {
-			connC.Write(data[:n])
-			fmt.Printf("From Server [%d]:\n%s\n", id, hex.Dump(data[:n]))
-			//fmt.Printf("From Server:\n%s\n",hex.EncodeToString(data[:n]))
+			fmt.Printf("From %s [%d]:\n", source, id)
+			fmt.Printf("%s\n", hex.Dump(data[:n]))
 		}
-		if err != nil && err != io.EOF {
-			fmt.Println(err)
+		if err != nil {
 			break
 		}
 	}
+
+}
+
+func handleServerMessage(connR, connC net.Conn, id int) {
+	// see comments in handleConnection
+	// this is the same, just inverse, reads from server, writes to client
+	reader := bufio.NewReader(connR)
+	writer := io.Writer(connC)
+
+	r, w := io.Pipe()
+	tee := io.TeeReader(reader, w)
+	go dumpData(r, "SERVER", id)
+	io.Copy(writer, tee)
 }
 
 func handleConnection(conn net.Conn, isTLS bool) {
 	var err error
 	var connR net.Conn
 
-	if isTLS == true {
+	if isTLS {
 		conf := tls.Config{InsecureSkipVerify: true}
 
 		if config.ClientKeyFile != "" { //use mtls
@@ -152,23 +170,31 @@ func handleConnection(conn net.Conn, isTLS bool) {
 	}
 
 	fmt.Printf("[*][%d] Connected to server: %s\n", ids, connR.RemoteAddr())
-	id := ids
+
+	// setup handler to read from server and print to screen
+	go handleServerMessage(connR, conn, ids)
 	ids++
-	go handleServerMessage(connR, conn, id)
-	for {
-		data := make([]byte, 2048)
-		n, err := conn.Read(data)
-		if n > 0 {
-			fmt.Printf("From Client [%d]:\n%s\n", id, hex.Dump(data[:n]))
-			//fmt.Printf("From Client:\n%s\n",hex.EncodeToString(data[:n]))
-			connR.Write(data[:n])
-			_ = hex.Dump(data[:n])
-		}
-		if err != nil && err == io.EOF {
-			fmt.Println(err)
-			break
-		}
-	}
+
+	// new reader to read from the client connection
+	reader := io.Reader(conn)
+	// new writer to write to the server connection
+	writer := io.Writer(connR)
+
+	// setup a pipe that will allow writing to the output (stdout) writer, without
+	// consuming the data
+	r, w := io.Pipe()
+
+	// create a TeeReader which will write everything it reads to the supplied writer
+	// this means each read from the client, will result in a write to the pipe,
+	// which then gets sent to the "dumpData" reader, which will output it to the screen
+	tee := io.TeeReader(reader, w)
+
+	// background the dumping of data to screen
+	go dumpData(r, "CLIENT", ids)
+
+	// consume all data and forward between connections in memory
+	io.Copy(writer, tee)
+
 	connR.Close()
 	conn.Close()
 }
@@ -179,7 +205,7 @@ func startListener(isTLS bool) {
 	var conn net.Listener
 	var cert tls.Certificate
 
-	if isTLS == true {
+	if isTLS {
 		if config.CACertFile != "" {
 			cert, _ = tls.LoadX509KeyPair(config.CACertFile, config.CAKeyFile)
 		} else {
