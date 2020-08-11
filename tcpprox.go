@@ -142,6 +142,12 @@ func handleServerMessage(connR, connL net.Conn, id int) {
 	_, e := io.Copy(tee, reader)
 
 	if e != nil && e != io.EOF {
+		// check if error is about the closed connection
+		// this is expected in most cases, so don't make a noise about it
+		netOpError, ok := e.(*net.OpError)
+		if ok && netOpError.Err.Error() == "use of closed network connection" {
+			return
+		}
 		fmt.Printf("bad io.Copy [handleServerMessage]: %v", e)
 	}
 }
@@ -149,6 +155,9 @@ func handleServerMessage(connR, connL net.Conn, id int) {
 func handleConnection(connL net.Conn, isTLS bool) {
 	var err error
 	var connR net.Conn
+
+	// make sure connection gets closed
+	defer connL.Close()
 
 	if isTLS {
 		conf := tls.Config{InsecureSkipVerify: true}
@@ -172,10 +181,9 @@ func handleConnection(connL net.Conn, isTLS bool) {
 		return
 	}
 
-	fmt.Printf("[*][%d] Connected to server: %s\n", ids, connR.RemoteAddr())
-
-	defer connL.Close()
 	defer connR.Close()
+
+	fmt.Printf("[*][%d] Connected to server: %s\n", ids, connR.RemoteAddr())
 
 	// setup handler to read from server and print to screen
 	go handleServerMessage(connR, connL, ids)
