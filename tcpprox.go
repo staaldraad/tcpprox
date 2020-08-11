@@ -19,9 +19,9 @@ import (
 )
 
 type TLS struct {
-	Country    []string "GB"
-	Org        []string ""
-	CommonName string   "*.domain.com"
+	Country    []string
+	Org        []string
+	CommonName string
 }
 
 type Config struct {
@@ -70,6 +70,11 @@ func genCert() ([]byte, *rsa.PrivateKey) {
 func genChildCert(cert tls.Certificate, ips, names []string) []byte {
 
 	parent, err := x509.ParseCertificate(cert.Certificate[0])
+
+	if err != nil {
+		fmt.Println("create child cert failed")
+		return nil
+	}
 
 	s, _ := rand.Prime(rand.Reader, 128)
 
@@ -130,7 +135,7 @@ func handleConnection(conn net.Conn, isTLS bool) {
 	var err error
 	var connR net.Conn
 
-	if isTLS == true {
+	if isTLS {
 		conf := tls.Config{InsecureSkipVerify: true}
 
 		if config.ClientKeyFile != "" { //use mtls
@@ -162,7 +167,6 @@ func handleConnection(conn net.Conn, isTLS bool) {
 			fmt.Printf("From Client [%d]:\n%s\n", id, hex.Dump(data[:n]))
 			//fmt.Printf("From Client:\n%s\n",hex.EncodeToString(data[:n]))
 			connR.Write(data[:n])
-			_ = hex.Dump(data[:n])
 		}
 		if err != nil && err == io.EOF {
 			fmt.Println(err)
@@ -179,7 +183,7 @@ func startListener(isTLS bool) {
 	var conn net.Listener
 	var cert tls.Certificate
 
-	if isTLS == true {
+	if isTLS {
 		if config.CACertFile != "" {
 			cert, _ = tls.LoadX509KeyPair(config.CACertFile, config.CAKeyFile)
 		} else {
