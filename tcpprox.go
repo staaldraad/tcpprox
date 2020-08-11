@@ -116,12 +116,12 @@ func genChildCert(cert tls.Certificate, ips, names []string) []byte {
 
 func dumpData(r io.Reader, source string, id int) {
 
+	data := make([]byte, 512)
 	for {
-		data := make([]byte, 1024)
 		n, err := r.Read(data)
 		if n > 0 {
 			fmt.Printf("From %s [%d]:\n", source, id)
-			fmt.Printf("%s\n", hex.Dump(data[:n]))
+			fmt.Println(hex.Dump(data[:n]))
 		}
 		if err != nil {
 			break
