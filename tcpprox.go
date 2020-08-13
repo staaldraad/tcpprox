@@ -125,9 +125,14 @@ func dumpData(r io.Reader, source string, id int) {
 		io.Copy(sessionFile, r)
 	} else {
 
-		var fw io.Writer
+		var fw *bufio.Writer         // used to write to file
+		var outDumper io.WriteCloser // used to write hex dump to file
 		if config.ToFile != "" {
 			fw = bufio.NewWriter(sessionFile)
+			if !config.Raw {
+				outDumper = hex.Dumper(fw)
+				defer outDumper.Close()
+			}
 		}
 
 		data := make([]byte, 512)
@@ -139,9 +144,11 @@ func dumpData(r io.Reader, source string, id int) {
 				// best yet is to only view the file after the transfer completes
 				if !config.Raw {
 					if config.ToFile != "" {
-						fw.Write([]byte(fmt.Sprintf("From %s [%d]:\n", source, id)))
-						// doing this is MUCH faster than using hex.Dumper and io.Copy :shrug:
-						fw.Write([]byte(fmt.Sprintln(hex.Dump(data[:n]))))
+						fw.WriteString(fmt.Sprintf("From %s [%d]:\n", source, id))
+						// doing this is using hex.Dumper(fw) is slightly faster than
+						// using `fw.WriteString(hex.Dump(data[:n]))`
+						// even though the code is debatable uglier
+						outDumper.Write(data[:n])
 					} else {
 						fmt.Printf("From %s [%d]:\n", source, id)
 						fmt.Println(hex.Dump(data[:n]))
