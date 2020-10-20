@@ -134,6 +134,6 @@ file.txt                                                                        
 And raw (no output at all): `./tcproxy -p 8000 user@remote -raw`
 
 ```
-$ scp -P 8000 root@localhost:file.txt /tmp/p
-file.txt                                                                                    100%   10MB  12.2MB/s   00:00    
+$ scp -P 8000 root@localhost:file.txt /tmp/p 
+file.txt                                                                                    100%   10MB  20.2MB/s   00:00     
 ```
