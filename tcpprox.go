@@ -15,6 +15,7 @@ import (
 	"io/ioutil"
 	"net"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -167,34 +168,45 @@ func dumpData(r io.Reader, source string, id int) {
 
 }
 
-func handleServerMessage(connR, connL net.Conn, id int) {
+func handleServerMessage(connR, connL net.Conn, id int, closer *sync.Once) {
 	// see comments in handleConnection
 	// this is the same, just inverse, reads from server, writes to client
-	reader := io.Reader(connR)
-	writer := io.Writer(connL)
+	closeFunc := func() {
+		fmt.Println("[*] Connections closed.")
+		_ = connL.Close()
+		_ = connR.Close()
+	}
 
 	r, w := io.Pipe()
-	tee := io.MultiWriter(writer, w)
+	tee := io.MultiWriter(connL, w)
 	go dumpData(r, "SERVER", id)
-	_, e := io.Copy(tee, reader)
+	_, e := io.Copy(tee, connR)
 
 	if e != nil && e != io.EOF {
 		// check if error is about the closed connection
 		// this is expected in most cases, so don't make a noise about it
 		netOpError, ok := e.(*net.OpError)
-		if ok && netOpError.Err.Error() == "use of closed network connection" {
-			return
+		if ok && netOpError.Err.Error() != "use of closed network connection" {
+			fmt.Printf("bad io.Copy [handleServerMessage]: %v", e)
 		}
-		fmt.Printf("bad io.Copy [handleServerMessage]: %v", e)
 	}
+
+	// ensure connections are closed. With the sync, this will either happen here
+	// or in the handleConnection function
+	closer.Do(closeFunc)
 }
 
 func handleConnection(connL net.Conn, isTLS bool) {
 	var err error
 	var connR net.Conn
+	var closer sync.Once
 
-	// make sure connection gets closed
-	defer connL.Close()
+	// make sure connections get closed
+	closeFunc := func() {
+		fmt.Println("[*] Connections closed")
+		_ = connL.Close()
+		_ = connR.Close()
+	}
 
 	if isTLS {
 		conf := tls.Config{InsecureSkipVerify: true}
@@ -218,17 +230,10 @@ func handleConnection(connL net.Conn, isTLS bool) {
 		return
 	}
 
-	defer connR.Close()
-
 	fmt.Printf("[*][%d] Connected to server: %s\n", ids, connR.RemoteAddr())
 
 	// setup handler to read from server and print to screen
-	go handleServerMessage(connR, connL, ids)
-
-	// new reader to read from the client connection
-	reader := io.Reader(connL)
-	// new writer to write to the server connection
-	writer := io.Writer(connR)
+	go handleServerMessage(connR, connL, ids, &closer)
 
 	// setup a pipe that will allow writing to the output (stdout) writer, without
 	// consuming the data
@@ -237,27 +242,35 @@ func handleConnection(connL net.Conn, isTLS bool) {
 	// create a MultiWriter which allows writing to multiple writers at once.
 	// this means each read from the client, will result in a write to both the server writer and the pipe writer,
 	// which then gets sent to the "dumpData" reader, which will output it to the screen
-	tee := io.MultiWriter(writer, w)
+	// directly pass connR (server) into the multiwriter. There is no need to allocate a new io.Writer(connR)
+	tee := io.MultiWriter(connR, w)
 
 	// background the dumping of data to screen
 	go dumpData(r, "CLIENT", ids)
 	ids++
 
 	// consume all data and forward between connections in memory
-	_, e := io.Copy(tee, reader)
+	// directly pass connL (client) into the io.Copy as the reader. There is no need to create a new io.Reader(connL)
+	_, e := io.Copy(tee, connL)
 	if e != nil && e != io.EOF {
 		fmt.Printf("bad io.Copy [handleConnection]: %v", e)
 	}
+
+	// ensure connections are closed. With the sync, this will either happen here
+	// or in the handleServerMessage function
+	closer.Do(closeFunc)
 
 }
 
 func startListener(isTLS bool) {
 
-	var err error
-	var conn net.Listener
-	var cert tls.Certificate
+	conn, err := net.Listen("tcp", fmt.Sprint(config.Localhost, ":", config.Localport))
+	if err != nil {
+		panic("failed to start listener: " + err.Error())
+	}
 
 	if isTLS {
+		var cert tls.Certificate
 		if config.CACertFile != "" {
 			cert, _ = tls.LoadX509KeyPair(config.CACertFile, config.CAKeyFile)
 		} else {
@@ -294,18 +307,12 @@ func startListener(isTLS bool) {
 		} */
 
 		conf.Rand = rand.Reader
-
-		conn, err = tls.Listen("tcp", fmt.Sprint(config.Localhost, ":", config.Localport), &conf)
-
-	} else {
-		conn, err = net.Listen("tcp", fmt.Sprint(config.Localhost, ":", config.Localport))
-	}
-
-	if err != nil {
-		panic("failed to connect: " + err.Error())
+		// wrap conn into a TLS listener
+		conn = tls.NewListener(conn, &conf)
 	}
 
 	fmt.Println("[*] Listening...")
+	defer conn.Close()
 
 	for {
 		cl, err := conn.Accept()
@@ -316,7 +323,6 @@ func startListener(isTLS bool) {
 		fmt.Printf("[*] Accepted from: %s\n", cl.RemoteAddr())
 		go handleConnection(cl, isTLS)
 	}
-	conn.Close()
 }
 
 func setConfig(configFile string, localPort int, localHost, remoteHost string, caCertFile, caKeyFile string, clientCertFile, clientKeyFile, outFile string) {
