@@ -12,7 +12,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"os"
 	"sync"
@@ -34,6 +33,7 @@ type Config struct {
 	CAKeyFile      string   `json:"CAKeyFile"`
 	ClientCertFile string   `json:"ClientCertFile"` // client cert for mTLS
 	ClientKeyFile  string   `json:"ClientKeyFile"`  // client priv key for mTLS
+	ListenerMTLS   bool     `json:"ListenerMTLS"`   // use the ClientKeyFile to set mTLS on the listener
 	IPS            []string // IPAddress for the child cert
 	Names          []string // DNSNames for the child cert
 	Raw            bool     `json:"Raw"`
@@ -150,6 +150,8 @@ func dumpData(r io.Reader, source string, id int) {
 						// using `fw.WriteString(hex.Dump(data[:n]))`
 						// even though the code is debatable uglier
 						outDumper.Write(data[:n])
+						fw.WriteByte('\n')
+						fw.Flush()
 					} else {
 						fmt.Printf("From %s [%d]:\n", source, id)
 						fmt.Println(hex.Dump(data[:n]))
@@ -294,17 +296,17 @@ func startListener(isTLS bool) {
 			Certificates: []tls.Certificate{cert},
 		}
 
-		/* optional to add mTLS on the listener side
-		if config.ClientKeyFile != "" {
-			caCert, err := ioutil.ReadFile(config.ClientKeyFile)
+		// optional to add mTLS on the listener side
+		if config.ListenerMTLS && config.ClientKeyFile != "" {
+			caCert, err := os.ReadFile(config.ClientKeyFile)
 			if err != nil {
-				log.Fatal(err)
+				panic("failed to start listener: " + err.Error())
 			}
 			caCertPool := x509.NewCertPool()
 			caCertPool.AppendCertsFromPEM(caCert)
 			conf.ClientCAs = caCertPool
 			conf.ClientAuth = tls.RequireAndVerifyClientCert
-		} */
+		}
 
 		conf.Rand = rand.Reader
 		// wrap conn into a TLS listener
@@ -325,9 +327,9 @@ func startListener(isTLS bool) {
 	}
 }
 
-func setConfig(configFile string, localPort int, localHost, remoteHost string, caCertFile, caKeyFile string, clientCertFile, clientKeyFile, outFile string) {
+func setConfig(configFile string, localPort int, localHost, remoteHost string, caCertFile, caKeyFile string, clientCertFile, clientKeyFile, outFile string, listenerMTLS bool) {
 	if configFile != "" {
-		data, err := ioutil.ReadFile(configFile)
+		data, err := os.ReadFile(configFile)
 		if err != nil {
 			fmt.Println("[-] Not a valid config file: ", err)
 			os.Exit(1)
@@ -349,6 +351,10 @@ func setConfig(configFile string, localPort int, localHost, remoteHost string, c
 	if clientCertFile != "" {
 		config.ClientCertFile = clientCertFile
 		config.ClientKeyFile = clientKeyFile
+		config.ListenerMTLS = listenerMTLS
+	} else if listenerMTLS {
+		fmt.Println("[-] ClientCertFile must be set when using listener mTLS")
+		os.Exit(1)
 	}
 
 	if localPort != 0 {
@@ -372,6 +378,7 @@ func main() {
 	remoteHostPtr := flag.String("r", "", "Remote Server address host:port")
 	configPtr := flag.String("c", "", "Use a config file (set TLS ect) - Commandline params overwrite config file")
 	tlsPtr := flag.Bool("s", false, "Create a TLS Proxy")
+	listenerMTLSPtr := flag.Bool("lmtls", false, "Enable mTLS on the listener. Requires clientKey")
 	caCertFilePtr := flag.String("cert", "", "Use a specific ca cert file")
 	caKeyFilePtr := flag.String("key", "", "Use a specific ca key file (must be set if --cert is set")
 	clientCertPtr := flag.String("clientCert", "", "A public client cert to use for mTLS")
@@ -392,7 +399,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	setConfig(*configPtr, *localPort, *localHost, *remoteHostPtr, *caCertFilePtr, *caKeyFilePtr, *clientCertPtr, *clientKeyPtr, *outFilePtr)
+	setConfig(*configPtr, *localPort, *localHost, *remoteHostPtr, *caCertFilePtr, *caKeyFilePtr, *clientCertPtr, *clientKeyPtr, *outFilePtr, *listenerMTLSPtr)
 
 	config.Quiet = *quietPtr
 	config.Raw = *rawPtr
