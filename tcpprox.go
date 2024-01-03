@@ -34,6 +34,7 @@ type Config struct {
 	ClientCertFile string   `json:"ClientCertFile"` // client cert for mTLS
 	ClientKeyFile  string   `json:"ClientKeyFile"`  // client priv key for mTLS
 	ListenerMTLS   bool     `json:"ListenerMTLS"`   // use the ClientKeyFile to set mTLS on the listener
+	RichRaw        bool     `json:"RichRaw"`
 	IPS            []string // IPAddress for the child cert
 	Names          []string // DNSNames for the child cert
 	Raw            bool     `json:"Raw"`
@@ -149,7 +150,11 @@ func dumpData(r io.Reader, source string, id int) {
 						// doing this is using hex.Dumper(fw) is slightly faster than
 						// using `fw.WriteString(hex.Dump(data[:n]))`
 						// even though the code is debatable uglier
-						outDumper.Write(data[:n])
+						if config.RichRaw { // don't hex dump, this is basically enriched raw
+							fw.Write(data[:n])
+						} else {
+							outDumper.Write(data[:n])
+						}
 						fw.WriteByte('\n')
 						fw.Flush()
 					} else {
@@ -327,7 +332,7 @@ func startListener(isTLS bool) {
 	}
 }
 
-func setConfig(configFile string, localPort int, localHost, remoteHost string, caCertFile, caKeyFile string, clientCertFile, clientKeyFile, outFile string, listenerMTLS bool) {
+func setConfig(configFile string, localPort int, localHost, remoteHost string, caCertFile, caKeyFile string, clientCertFile, clientKeyFile, outFile string) {
 	if configFile != "" {
 		data, err := os.ReadFile(configFile)
 		if err != nil {
@@ -351,10 +356,6 @@ func setConfig(configFile string, localPort int, localHost, remoteHost string, c
 	if clientCertFile != "" {
 		config.ClientCertFile = clientCertFile
 		config.ClientKeyFile = clientKeyFile
-		config.ListenerMTLS = listenerMTLS
-	} else if listenerMTLS {
-		fmt.Println("[-] ClientCertFile must be set when using listener mTLS")
-		os.Exit(1)
 	}
 
 	if localPort != 0 {
@@ -385,6 +386,7 @@ func main() {
 	clientKeyPtr := flag.String("clientKey", "", "A public client key to use for mTLS")
 	quietPtr := flag.Bool("q", false, "Hide app messages and just show the data stream")
 	rawPtr := flag.Bool("raw", false, "Don't use hex.dump to pretty format output")
+	richRawPtr := flag.Bool("richraw", false, "Slightly enrich the raw output, don't use hex.dump to pretty format output")
 	outFilePtr := flag.String("o", "", "Write output to file")
 
 	flag.Parse()
@@ -399,10 +401,21 @@ func main() {
 		os.Exit(1)
 	}
 
-	setConfig(*configPtr, *localPort, *localHost, *remoteHostPtr, *caCertFilePtr, *caKeyFilePtr, *clientCertPtr, *clientKeyPtr, *outFilePtr, *listenerMTLSPtr)
+	setConfig(*configPtr, *localPort, *localHost, *remoteHostPtr, *caCertFilePtr, *caKeyFilePtr, *clientCertPtr, *clientKeyPtr, *outFilePtr)
 
+	config.ListenerMTLS = *listenerMTLSPtr
+	if config.ListenerMTLS {
+		fmt.Println("[-] ClientCertFile must be set when using listener mTLS")
+		os.Exit(1)
+	}
 	config.Quiet = *quietPtr
 	config.Raw = *rawPtr
+	config.RichRaw = *richRawPtr
+
+	if config.Raw && config.RichRaw {
+		fmt.Println("[-] Conflicting configuration, -raw and -richraw can't be used together.")
+		os.Exit(1)
+	}
 
 	if config.Raw && config.ToFile == "" {
 		fmt.Println("[-] Raw mode specified but no output file supplied. There won't be any output!")
